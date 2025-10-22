@@ -1,6 +1,6 @@
 import math
 import re
-import os
+import os, glob
 
 import torch
 import torch.nn as nn
@@ -301,6 +301,49 @@ def save_checkpoint(
     torch.save(checkpoint, ckpt_path)
 
 
+_EPOCH_RE = re.compile(r"epoch_(\d+)\.pt$")
+
+
+def load_latest_checkpoint(
+    ckpt_dir, model, optimizer=None, scheduler=None, device="cpu"
+):
+    os.makedirs(ckpt_dir, exist_ok=True)
+    ckpts = sorted(glob.glob(os.path.join(ckpt_dir, "epoch_*.pt")))
+    if not ckpts:
+        print("No checkpoint found. Starting from scratch.")
+        return 1, [], []
+
+    def _epoch_num(path):
+        m = _EPOCH_RE.search(os.path.basename(path))
+        return int(m.group(1)) if m else -1
+
+    latest = max(ckpts, key=_epoch_num)
+    print(f"Loading checkpoint: {latest}")
+    ckpt = torch.load(latest, map_location=device)
+
+    model.load_state_dict(ckpt["model_state_dict"])
+    if (
+        optimizer
+        and "optimizer_state_dict" in ckpt
+        and ckpt["optimizer_state_dict"] is not None
+    ):
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    if (
+        scheduler
+        and "scheduler_state_dict" in ckpt
+        and ckpt["scheduler_state_dict"] is not None
+    ):
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+
+    batch_losses = ckpt.get("batch_losses", [])
+    epoch_losses = ckpt.get("epoch_losses", [])
+    start_epoch = int(ckpt.get("epoch", 0)) + 1
+
+    print(f"Resuming from epoch {start_epoch}")
+
+    return start_epoch, batch_losses, epoch_losses
+
+
 def train(
     model,
     dataloader,
@@ -310,15 +353,18 @@ def train(
     device="cuda",
     epochs=50,
     grad_clip=None,
+    ckpt_dir="checkpoints",
+    start_epoch=1,
+    batch_losses=None,
+    epoch_losses=None,
 ):
     model.to(device)
-    batch_losses = []
-    epoch_losses = []
+    batch_losses = [] if batch_losses is None else list(batch_losses)
+    epoch_losses = [] if epoch_losses is None else list(epoch_losses)
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
-        total_loss = 0.0
-        total_acc = 0.0
+        total_loss, total_acc = 0.0, 0.0
         n_batches = len(dataloader)
 
         progress = tqdm(
@@ -328,7 +374,6 @@ def train(
             ncols=100,
             dynamic_ncols=True,
         )
-
         for step, (src, dec_inp, dec_out) in enumerate(progress, start=1):
             src, dec_inp, dec_out = (
                 src.to(device),
@@ -351,7 +396,6 @@ def train(
 
             if grad_clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-
             optimizer.step()
             if scheduler:
                 scheduler.step()
@@ -363,8 +407,8 @@ def train(
 
             progress.set_postfix(
                 {
-                    "loss": f"{total_loss / step:.4f}",
-                    "acc": f"{total_acc / step:.4f}",
+                    "loss": f"{total_loss/step:.4f}",
+                    "acc": f"{total_acc/step:.4f}",
                     "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
                 }
             )
@@ -380,6 +424,7 @@ def train(
             epoch_avg_loss,
             batch_losses,
             epoch_losses,
+            path=ckpt_dir,
         )
 
     return batch_losses, epoch_losses
@@ -399,6 +444,14 @@ train_loader = DataLoader(
     pin_memory=(device == "cuda"),
 )
 
+start_epoch, batch_losses, epoch_losses = load_latest_checkpoint(
+    ckpt_dir="checkpoints",
+    model=model,
+    optimizer=optimizer,
+    scheduler=scheduler,
+    device=device,
+)
+
 batch_losses, epoch_losses = train(
     model,
     dataloader=train_loader,
@@ -408,4 +461,8 @@ batch_losses, epoch_losses = train(
     device=device,
     epochs=50,
     grad_clip=1.0,
+    ckpt_dir="checkpoints",
+    start_epoch=start_epoch,
+    batch_losses=batch_losses,
+    epoch_losses=epoch_losses,
 )
