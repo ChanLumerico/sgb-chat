@@ -159,6 +159,7 @@ answers = [re.sub(r"([?.!,])", r" \1 ", str(s)).strip() for s in df["A"]]
 
 tokenizer = Tokenizer.from_file("data/tokenizer.json")
 vocab_size = tokenizer.get_vocab_size()
+max_length = 40
 
 PAD_ID = tokenizer.token_to_id("[PAD]")
 START_ID = tokenizer.token_to_id("[START]")
@@ -221,10 +222,12 @@ src, tgt = tokenize_and_filter(
     tokenizer=tokenizer,
     start_token_id=START_ID,
     end_token_id=END_ID,
-    max_length=40,
+    max_length=max_length,
     pad_id=PAD_ID,
 )
 
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 batch_size = 64
 num_layers = 2
@@ -238,7 +241,30 @@ dec_labels = tgt[:, 1:]
 
 dataset = TensorDataset(src, dec_inputs, dec_labels)
 
-train_loader = DataLoader(dataset, batch_size, shuffle=True, drop_last=True)
+val_ratio = 0.1
+n_total = len(dataset)
+n_val = int(n_total * val_ratio)
+n_train = n_total - n_val
+
+train_ds, val_ds = random_split(dataset, [n_train, n_val])
+
+train_loader = DataLoader(
+    train_ds,
+    batch_size=batch_size,
+    shuffle=True,
+    drop_last=True,
+    num_workers=2,
+    pin_memory=(device == "cuda"),
+)
+
+val_loader = DataLoader(
+    val_ds,
+    batch_size=batch_size,
+    shuffle=False,
+    drop_last=False,
+    num_workers=2,
+    pin_memory=(device == "cuda"),
+)
 
 model = Transformer(
     src_vocab_size=vocab_size,
@@ -275,6 +301,33 @@ def token_accuracy(logits, targets, pad_id=0):
     return correct / max(1, total)
 
 
+@torch.no_grad()
+def evaluate_loss(model, dataloader, pad_id=0):
+    model.eval()
+    total, count = 0.0, 0
+    for src, dec_inp, dec_out in dataloader:
+        src, dec_inp, dec_out = src.to(device), dec_inp.to(device), dec_out.to(device)
+
+        logits = model(
+            src=src,
+            tgt_inp=dec_inp,
+            src_pad_mask=(src == pad_id),
+            tgt_pad_mask=(dec_inp == pad_id),
+        )
+        loss = F.cross_entropy(
+            logits.transpose(1, 2),
+            dec_out,
+            reduction="none",
+            ignore_index=pad_id,
+        )
+        mask = (dec_out != pad_id).float()
+        loss = (loss * mask).sum() / (mask.sum() + 1e-8)
+
+        total += loss.item()
+        count += 1
+    return total / max(1, count)
+
+
 def save_checkpoint(
     model,
     optimizer,
@@ -283,65 +336,46 @@ def save_checkpoint(
     epoch_loss,
     batch_losses,
     epoch_losses,
+    val_epoch_losses=None,
     path="checkpoints",
 ):
     os.makedirs(path, exist_ok=True)
-    ckpt_path = os.path.join(path, f"epoch_{epoch:03d}.pt")
-
     checkpoint = {
-        "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
-        "loss": epoch_loss,
+        "epoch": epoch,
+        "epoch_loss": epoch_loss,
         "batch_losses": batch_losses,
         "epoch_losses": epoch_losses,
+        "val_epoch_losses": val_epoch_losses,
     }
-
-    torch.save(checkpoint, ckpt_path)
-
-
-_EPOCH_RE = re.compile(r"epoch_(\d+)\.pt$")
+    torch.save(checkpoint, os.path.join(path, f"epoch_{epoch}.pt"))
 
 
-def load_latest_checkpoint(
-    ckpt_dir, model, optimizer=None, scheduler=None, device="cpu"
-):
-    os.makedirs(ckpt_dir, exist_ok=True)
-    ckpts = sorted(glob.glob(os.path.join(ckpt_dir, "epoch_*.pt")))
+def load_latest_checkpoint(ckpt_dir, model, optimizer, scheduler, device):
+    if not os.path.exists(ckpt_dir):
+        return 1, [], [], []
+
+    ckpts = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
     if not ckpts:
-        print("No checkpoint found. Starting from scratch.")
-        return 1, [], []
+        return 1, [], [], []
 
-    def _epoch_num(path):
-        m = _EPOCH_RE.search(os.path.basename(path))
-        return int(m.group(1)) if m else -1
+    latest_ckpt = sorted(ckpts, key=lambda x: int(x.split("_")[1].split(".")[0]))[-1]
+    checkpoint = torch.load(os.path.join(ckpt_dir, latest_ckpt), map_location=device)
 
-    latest = max(ckpts, key=_epoch_num)
-    print(f"Loading checkpoint: {latest}")
-    ckpt = torch.load(latest, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scheduler and checkpoint["scheduler_state_dict"]:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
 
-    model.load_state_dict(ckpt["model_state_dict"])
-    if (
-        optimizer
-        and "optimizer_state_dict" in ckpt
-        and ckpt["optimizer_state_dict"] is not None
-    ):
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    if (
-        scheduler
-        and "scheduler_state_dict" in ckpt
-        and ckpt["scheduler_state_dict"] is not None
-    ):
-        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-
-    batch_losses = ckpt.get("batch_losses", [])
-    epoch_losses = ckpt.get("epoch_losses", [])
-    start_epoch = int(ckpt.get("epoch", 0)) + 1
-
-    print(f"Resuming from epoch {start_epoch}")
-
-    return start_epoch, batch_losses, epoch_losses
+    print(f"✅ Loaded checkpoint from epoch {checkpoint['epoch']}")
+    return (
+        checkpoint["epoch"] + 1,
+        checkpoint.get("batch_losses", []),
+        checkpoint.get("epoch_losses", []),
+        checkpoint.get("val_epoch_losses", []),
+    )
 
 
 def train(
@@ -357,10 +391,16 @@ def train(
     start_epoch=1,
     batch_losses=None,
     epoch_losses=None,
+    val_loader=None,
+    early_stop_patience=None,
 ):
     model.to(device)
     batch_losses = [] if batch_losses is None else list(batch_losses)
     epoch_losses = [] if epoch_losses is None else list(epoch_losses)
+    val_epoch_losses = []
+
+    best_val = float("inf")
+    bad_epochs = 0
 
     for epoch in range(start_epoch, epochs + 1):
         model.train()
@@ -380,22 +420,20 @@ def train(
                 dec_inp.to(device),
                 dec_out.to(device),
             )
-            src_pad_mask = src == pad_id
-            tgt_pad_mask = dec_inp == pad_id
 
             logits = model(
                 src=src,
                 tgt_inp=dec_inp,
-                src_pad_mask=src_pad_mask,
-                tgt_pad_mask=tgt_pad_mask,
+                src_pad_mask=(src == pad_id),
+                tgt_pad_mask=(dec_inp == pad_id),
             )
 
             loss = seq_ce_loss(logits, dec_out, pad_id)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-
             if grad_clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
             optimizer.step()
             if scheduler:
                 scheduler.step()
@@ -413,24 +451,66 @@ def train(
                 }
             )
 
-        epoch_avg_loss = total_loss / n_batches
-        epoch_losses.append(epoch_avg_loss)
+        train_epoch_loss = total_loss / n_batches
+        epoch_losses.append(train_epoch_loss)
+
+        if val_loader is not None:
+            val_loss = evaluate_loss(model, val_loader, pad_id=pad_id)
+            val_epoch_losses.append(val_loss)
+            print(
+                f"[Epoch {epoch}] Valid Loss: {val_loss:.4f} | "
+                f"Perplexity: {math.exp(val_loss):.2f}"
+            )
+
+            if val_loss < best_val:
+                best_val = val_loss
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    scheduler,
+                    epoch,
+                    train_epoch_loss,
+                    batch_losses,
+                    epoch_losses,
+                    path=os.path.join(ckpt_dir, "best"),
+                )
+                bad_epochs = 0
+
+            else:
+                bad_epochs += 1
+                if (early_stop_patience is not None) and (
+                    bad_epochs >= early_stop_patience
+                ):
+                    print(
+                        f"Early stopping at epoch {epoch} "
+                        f"(no val improvement for {bad_epochs} epochs)."
+                    )
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        scheduler,
+                        epoch,
+                        train_epoch_loss,
+                        batch_losses,
+                        epoch_losses,
+                        path=ckpt_dir,
+                    )
+                    return batch_losses, epoch_losses, val_epoch_losses
 
         save_checkpoint(
             model,
             optimizer,
             scheduler,
             epoch,
-            epoch_avg_loss,
+            train_epoch_loss,
             batch_losses,
             epoch_losses,
+            val_epoch_losses=val_epoch_losses,
             path=ckpt_dir,
         )
 
-    return batch_losses, epoch_losses
+    return batch_losses, epoch_losses, val_epoch_losses
 
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
 
 optimizer = Adam(model.parameters(), lr=1.0, betas=(0.9, 0.98), eps=1e-9)
 scheduler = TransformerScheduler(optimizer, d_model=d_model, warmup_steps=4000)
@@ -444,7 +524,7 @@ train_loader = DataLoader(
     pin_memory=(device == "cuda"),
 )
 
-start_epoch, batch_losses, epoch_losses = load_latest_checkpoint(
+start_epoch, batch_losses, epoch_losses, val_epoch_losses = load_latest_checkpoint(
     ckpt_dir="checkpoints",
     model=model,
     optimizer=optimizer,
@@ -452,7 +532,7 @@ start_epoch, batch_losses, epoch_losses = load_latest_checkpoint(
     device=device,
 )
 
-batch_losses, epoch_losses = train(
+batch_losses, epoch_losses, val_epoch_losses = train(
     model,
     dataloader=train_loader,
     optimizer=optimizer,
@@ -465,4 +545,62 @@ batch_losses, epoch_losses = train(
     start_epoch=start_epoch,
     batch_losses=batch_losses,
     epoch_losses=epoch_losses,
+    val_loader=val_loader,
+    early_stop_patience=5,
 )
+
+
+@torch.no_grad()
+def evaluate(sentence):
+    model.eval()
+    sentence_ids = tokenizer.encode(sentence).ids
+    src = torch.tensor(
+        [[START_ID] + sentence_ids + [END_ID]], dtype=torch.long, device=device
+    )
+
+    output = torch.tensor([[START_ID]], dtype=torch.long, device=device)
+    for _ in range(max_length):
+        src_pad_mask = src == tokenizer.token_to_id("[PAD]")
+        tgt_pad_mask = output == tokenizer.token_to_id("[PAD]")
+        tgt_mask = model.transformer.generate_square_subsequent_mask(output.size(1)).to(
+            device
+        )
+
+        logits = model(
+            src=src,
+            tgt_inp=output,
+            src_pad_mask=src_pad_mask,
+            tgt_pad_mask=tgt_pad_mask,
+            tgt_mask=tgt_mask,
+        )
+
+        next_token_logits = logits[:, -1, :]
+        predicted_id = next_token_logits.argmax(dim=-1).item()
+
+        if predicted_id == END_ID:
+            break
+
+        next_token = torch.tensor([[predicted_id]], device=device)
+        output = torch.cat([output, next_token], dim=-1)
+
+    return output.squeeze(0).tolist()
+
+
+@torch.no_grad()
+def predict(sentence):
+    predicted_ids = evaluate(sentence)
+    decoded = tokenizer.decode(
+        [i for i in predicted_ids if i < tokenizer.get_vocab_size()]
+    )
+    return decoded
+
+
+# print("Model Prepared.\n")
+
+# while True:
+#     input_ = input("In: ").strip()
+#     if input_ == "END":
+#         break
+
+#     output = predict(input_)
+#     print(f"Out: {output}\n")
