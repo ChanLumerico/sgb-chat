@@ -595,12 +595,12 @@ def predict(sentence):
     return decoded
 
 
-# print("Model Prepared.\n")
+print("Model Prepared.\n")
 
-# while True:
-#     input_ = input("In: ").strip()
-#     if input_ == "END":
-#         break
+while True:
+    input_ = input("In: ").strip()
+    if input_ == "END":
+        break
 
-#     output = predict(input_)
-#     print(f"Out: {output}\n")
+    output = predict(input_)
+    print(f"Out: {output}\n")
