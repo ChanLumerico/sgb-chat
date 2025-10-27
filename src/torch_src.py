@@ -505,7 +505,7 @@ def train(
             train_epoch_loss,
             batch_losses,
             epoch_losses,
-            val_epoch_losses=val_epoch_losses,
+            val_epoch_losses,
             path=ckpt_dir,
         )
 
