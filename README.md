@@ -581,4 +581,207 @@ class PositionalEncoding(nn.Module):
 
 256차원의 positional encoding 값을 시각적으로 나타내면 다음과 같은 패턴이 나타난다.
 
-[Positional Encoding](./fig/pe.png)
+![Positional Encoding](./fig/pe.png)
+
+### 2️⃣ Transformer Class
+
+```python
+class Transformer(nn.Module):
+    def __init__(
+        self,
+        src_vocab_size: int,
+        tgt_vocab_size: int,
+        d_model: int = 512,
+        dim_feedforward: int = 2048,
+        num_heads: int = 8,
+        num_encoder_layers: int = 6,
+        num_decoder_layers: int = 6,
+        dropout: float = 0.1,
+        pad_id: int = 0,
+        tie_weights: bool = True,
+    ) -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.pad_id = pad_id
+
+        self.src_embedding = nn.Embedding(src_vocab_size, d_model, padding_idx=pad_id)
+        self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model, padding_idx=pad_id)
+
+        self.positional_encoder = PositionalEncoding(d_model, dropout, max_len=5000)
+
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            num_heads=num_heads,
+            num_encoder_layers=num_encoder_layers,
+            num_decoder_layers=num_decoder_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+        )
+
+        self.out = nn.Linear(d_model, tgt_vocab_size, bias=not tie_weights)
+        if tie_weights:
+            self.out.weight = self.tgt_embedding.weight
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform(m.weight)
+                if m.bias is not None:
+                    nn.init.constant(m.bias, 0.0)
+            elif isinstance(m, nn.Embedding):
+                nn.init.normal(m.weight, mean=0.0, std=1.0)
+
+    @staticmethod
+    def _mask_padding_mask(tokens: Tensor, pad_id: int) -> Tensor:
+        return tokens == pad_id
+
+    @staticmethod
+    def _mask_square_subseq_mask(sz: int) -> Tensor:
+        return lucid.triu(lucid.full((sz, sz), -lucid.inf), diagonal=1)
+
+    def forward(
+        self,
+        src: Tensor,
+        tgt: Tensor,
+        tgt_mask: Tensor | None = None,
+        src_pad_mask: Tensor | None = None,
+        tgt_pad_mask: Tensor | None = None,
+    ) -> Tensor:
+        device = src.device
+
+        scale = self.d_model ** 0.5
+        src_emb = self.src_embedding(src) * scale
+        tgt_emb = self.tgt_embedding(tgt) * scale
+
+        src_emb = self.positional_encoder(src_emb)
+        tgt_emb = self.positional_encoder(tgt_emb)
+
+        if tgt_mask is None:
+            T = tgt_emb.shape[1]
+            tgt_mask = self._mask_square_subseq_mask(T).to(device)
+
+        if src_pad_mask is None:
+            src_pad_mask = self._mask_padding_mask(src, self.pad_id)
+        if tgt_pad_mask is None:
+            tgt_pad_mask = self._mask_padding_mask(tgt, self.pad_id)
+
+        x = self.transformer(
+            src=src_emb,
+            tgt=tgt_emb,
+            tgt_mask=tgt_mask,
+            src_key_padding_mask=src_pad_mask,
+            tgt_key_padding_mask=tgt_pad_mask,
+            mem_key_padding_mask=src_pad_mask,
+        )
+
+        logits = self.out(x)
+        return logits
+```
+
+여기서 **완전 연결 레이어(FC Layer)** 모듈 `nn.Linear`의 가중치 초기화는 **Xavier Uniform** 방식을 사용하였다.
+
+#### 💡 Xavier Uniform Initialization
+
+신경망의 각 층에서 입력과 출력의 **분산(variance)** 을 일정하게 유지하기 위해 고안된 초기화 방법이다.
+
+가중치 초기와를 잘못할 경우 다음과 같은 문제가 발생한다:
+
+- **기울기 소멸(Gradient vanishing)**: 값이 너무 작아지며 학습이 *정체(stagnate)* 됨
+- **기울기 폭발(Gradient explosion)**: 값이 너무 커져 학습이 *불안정(unstable)* 해짐
+
+입력 차원을 $n_{in}$, 출력 차원을 $n_{out}$이라고 하면 $W_{ij}$는 다음과 같이 초기화된다.
+
+$$
+W_{ij}\sim\mathcal{U}(-a,a),\quad\text{where}\quad a=\sqrt{\frac{6}{n_{in}+n_{out}}}
+$$
+
+임베딩 레이어 모듈 `nn.Embedding`의 가중치 초기화는 표준정규분포($\mathcal{N}(0,1)$)를 사용하였다.
+
+### 3️⃣ Noam Scheduler Class
+
+```python
+class NoamScheduler(optim.lr_scheduler.LRScheduler):
+    def __init__(
+        self,
+        optimizer: optim.Optimizer,
+        d_model: int,
+        warmup_steps: int = 4000,
+        last_epoch: int = -1,
+    ) -> None:
+        super().__init__(optimizer, last_epoch)
+        self.d_model = d_model
+        self.warmup_steps = warmup_steps
+
+    def get_lr(self) -> list[float]:
+        step = max(1, self._step_count)
+        scale = self.d_model ** -0.5
+        
+        arg1 = step ** -0.5
+        arg2 = step * self.warmup_steps ** -1.5
+
+        lr = scale * min(arg1, arg2)
+        return [lr] * len(self.base_lrs)
+```
+
+Transformer에서 자주 쓰이는 **Noam Scheduler** 는 *"Attention Is All You Need"* 논문에서 처음 제안된 학습률(learning rate; LR) 스케쥴링 방식이다.
+
+핵심 아이디어는 다음과 같다:
+
+- 학습 초기에 LR을 점점 **증가(warmup)** 시켜서 모델이 안정적으로 학습하게 하고,
+- 이후에는 step 수가 커질수록 LR을 점점 **감소(decay)** 시켜서 학습이 수렴(converge)하도록 만드는 방식이다.
+
+$$
+\text{lr}(\text{step})=d_{model}^{-0.5}\cdot\min\left(\text{step}^{-0.5},\text{step}\cdot\text{warmup}^{-1.5}\right)
+$$
+
+이를 그래프로 나타낸다면 다음과 같다.
+
+![Noam Scheduler](./fig/noam.png)
+
+### 4️⃣ Data Setup
+
+우선 사전학습된 토크나이저 json 파일을 로드하였다.
+
+```python
+tokenizer = Tokenizer.from_file("../data/tokenizer.json")
+vocab_size = tokenizer.get_vocab_size()
+max_length = 40
+```
+
+다음으로 기본적인 특수 토큰들에 대한 ID를 부여하였다.
+
+```python
+PAD_ID = tokenizer.token_to_id("[PAD]")
+START_ID = tokenizer.token_to_id("[START]")
+END_ID = tokenizer.token_to_id("[END]")
+```
+
+이후, 소스(source)와 타겟(target) 데이터를 **토크나이즈(tokenize)** 한 전처리된 데이터를 로드하였다.
+
+```python
+src = lucid.load("../data/src.lct")
+tgt = lucid.load("../data/tgt.lct")
+```
+
+그 다음, **teacher forcing** 을 위해 *1-토큰* shift된 디코더 인풋과 타겟 데이터셋를 생성하였다.
+
+```python
+dec_inputs = tgt[:, :-1]
+dec_labels = tgt[:, 1:]
+
+dataset = TensorDataset(src, dec_inputs, dec_labels)
+dataset.to(device)
+```
+
+마지막으로 훈련용 데이터셋과 검증용 데이터셋을 분리하였다.
+
+```python
+val_ratio = 0.1
+n_total = len(dataset)
+n_val = int(n_total * val_ratio)
+n_train = n_total - n_val
+
+train_set, valid_set = random_split(dataset, [n_train, n_val])
+```
