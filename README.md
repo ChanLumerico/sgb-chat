@@ -38,15 +38,15 @@ $$
 
 - 임베딩 행렬(Embedding Matrix):
 
-  $$
-  \mathbf{E}\in\mathbb{R}^{V\times d_{model}}
-  $$
+$$
+\mathbf{E}\in\mathbb{R}^{V\times d_{model}}
+$$
 
 - 입력 시퀀스 길이를 $T$라 하면, one-hot 벡터 $\mathbf{o}_t\in\mathbb{R}^V$ (단어 인덱스에만 $1$, 나머지 $0$)를 곱해 임베딩을 얻는다:
 
-  $$
-  \mathbf{e}_t=\mathbf{o}_t^\top\mathbf{E}\in\mathbb{R}^{d_{model}}
-  $$
+$$
+\mathbf{e}_t=\mathbf{o}_t^\top\mathbf{E}\in\mathbb{R}^{d_{model}}
+$$
 
   실제로 구현은 one-hot을 만들지 않고 그냥 `E[token_id]`를 가져오는 gather 연산을 취한다.
 
@@ -98,7 +98,7 @@ $$
 - 즉, 어떤 차원은 *"느리게 변하는 위치 정보"*, 어떤 차원은 *"빠르게 변하는 미세 위치 정보"* 를 담는다.
 - 이 조합으로 모델은 상대적 거리 정보까지 유추할 수 있다.
 
-  즉, $\text{PE}(t+k)-\text{PE}(t)$가 일정한 구조를 갖는다 $\rightarrow$ *"$k$만큼 떨어져 있음"* 을 계산 가능하다.
+  즉, $\text{PE}(t+k)-\text{PE}(t)$가 일정한 구조를 갖는다 $\rightarrow$ *"$k$ 만큼 떨어져 있음"* 을 계산 가능하다.
 
 #### 🔹 Implementation Perspective
 
@@ -120,7 +120,7 @@ Self-Attention은 시퀀스 안의 각 위치가, 같은 시퀀스의 다른 위
 
 #### 🔸 Query/Key/Value (Q, K, V)
 
-각 입력 벡터 $\mathbf{z}_t\in\mathbb{R}^{d_{model}}$에 대해, 세 개의 서로 다른 **선형 변환(linear transformation)** 을 적용한다.
+각 입력 벡터 $\mathbf{z}_t\in\mathbb{R}^{d_{model}}$ 에 대해, 세 개의 서로 다른 **선형 변환(linear transformation)** 을 적용한다.
 
 $$
 \mathbf{q}_t=\mathbf{z}_t\mathbf{W}^Q,\quad\mathbf{k}_t=\mathbf{z}_t\mathbf{W}^K,\quad\mathbf{v}_t=\mathbf{z}_t\mathbf{W}^V
@@ -192,10 +192,10 @@ $$
 $$
 \alpha_{t,s}=\frac{\exp(\tilde{S}_{t,s})}{\sum_{u=1}^T\exp(\tilde{S}_{t,u})}
 \quad\Rightarrow\quad
-\mathbf{A}=\operatorname{softmax}(\tilde{\mathbf{S}})\in\mathbb{R}^{T\times T}
+\mathbf{A}=\text{softmax}(\tilde{\mathbf{S}})\in\mathbb{R}^{T\times T}
 $$
 
-이 $\mathbf{A}$는 *"$t$번째 토큰이 $s$번째 토큰에 얼마나 집중(attend)하는가"* 를 나타내는 **attention matrix** 이다.
+이 $\mathbf{A}$는 *"$t$ 번째 토큰이 $s$ 번째 토큰에 얼마나 집중(attend)하는가"* 를 나타내는 **attention matrix** 이다.
 
 #### 🔸 Output Vector via Weighted-Sum
 
@@ -216,7 +216,7 @@ $$
 각 헤드 $i\in\{1,\ldots,h\}$의 output을 계산하고
 
 $$
-\text{head}_i=\operatorname{Attention}\left(\mathbf{Z}\mathbf{W}^Q_i,\mathbf{Z}\mathbf{W}^K_i,\mathbf{Z}\mathbf{W}^V_i\right)\in\mathbb{R}^{T\times d_v}
+\text{head}_i=\text{Attention}\left(\mathbf{Z}\mathbf{W}^Q_i,\mathbf{Z}\mathbf{W}^K_i,\mathbf{Z}\mathbf{W}^V_i\right)\in\mathbb{R}^{T\times d_v}
 $$
 
 그 다음 모든 헤드를 concatenate 한다.
@@ -240,7 +240,7 @@ $$
 $$
 
 $$
-\text{where}\quad\text{head}_i=\operatorname{softmax}\left(\frac{\mathbf{Z}\mathbf{W}^Q_i(\mathbf{Z}\mathbf{W}^K_i)^\top}{\sqrt{d_k}}+\mathbf{M}\right)\left(\mathbf{Z}\mathbf{W}^V_i\right)
+\text{where}\quad\text{head}_i=\text{softmax}\left(\frac{\mathbf{Z}\mathbf{W}^Q_i(\mathbf{Z}\mathbf{W}^K_i)^\top}{\sqrt{d_k}}+\mathbf{M}\right)\left(\mathbf{Z}\mathbf{W}^V_i\right)
 $$
 
 ### 4️⃣ Encoder
@@ -262,10 +262,10 @@ Transformer Encoder는 동일한 블록을 $N$번 반복한 stack이다. 각 블
 
 #### 🔹 Residual + LayerNorm
 
-한 sub-layer를 함수 $\operatorname{sublayer}(\cdot)$라고 할 때,
+한 sub-layer를 함수 $\text{sublayer}(\cdot)$라고 할 때,
 
 $$
-\text{LayerOutput} = \text{LayerNorm}\left(\mathbf{X}+\text{Dropout}\left(\operatorname{sublayer}\left(\mathbf{X}\right)\right)\right)
+\text{LayerOutput} = \text{LayerNorm}\left(\mathbf{X}+\text{Dropout}\left(\text{sublayer}\left(\mathbf{X}\right)\right)\right)
 $$
 
 Residual은 gradient 흐름을 **안정화** 시켜 deep-stack 학습을 돕는다.
@@ -419,7 +419,7 @@ $$
 학습 시에는 **teacher forcing** 으로 정답 시퀀스를 한 시점씩 shift하여 다음 토큰을 예측하게 하고, Cross-Entorypy Loss를 사용한다.
 
 $$
-\mathcal{L}=-\sum_{t=1}^{T_{tgt}}\log P\left(y_t^*~|~y_{<t}^*,\text{EncOut}\right)
+\mathcal{L}=-\sum_{t=1}^{T_{tgt}}\log P\left(y_t^\star~|~y_{<t}^\star,\text{EncOut}\right)
 $$
 
 여기서 $y_t^*$는 정답 토큰이다.
@@ -439,7 +439,7 @@ $$
    각 위치가 전체 시퀀스의 다른 위치를 attend하고 가중합을 만들도록 서로 다른 시각(head)을 병렬로 학습.
 
 $$
-\text{Attention}(\mathbf{Q},\mathbf{K},\mathbf{V})=\operatorname{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right)\mathbf{V}
+\text{Attention}(\mathbf{Q},\mathbf{K},\mathbf{V})=\text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right)\mathbf{V}
 $$
 
 4. **Encoder**
