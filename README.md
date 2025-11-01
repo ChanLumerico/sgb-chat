@@ -1,6 +1,6 @@
 # 🤖 SGB-Chat
 
-대한민국 군 병영시설 중 하나인 *사이버지식정보방(이하 사지방)* 에서 군 생활동안 직접 개발한 NumPy/MLX 기반 딥러닝 프레임워크인 [`💎Lucid`](https://github.com/ChanLumerico/lucid)의 실질적인 성능 검증을 위해 수행한 간단한 채팅용 Transformer 모델 학습
+대한민국 군 병영시설 중 하나인 *사이버지식정보방(이하 사지방)* 에서 군 생활동안 **직접 개발**한 NumPy/MLX 기반 딥러닝 프레임워크인 [`💎Lucid`](https://github.com/ChanLumerico/lucid)의 실질적인 성능 검증을 위해 수행한 간단한 채팅용 Transformer 모델 학습
 
 추가적으로 상대적으로 성능이 열악한, 외장 GPU 조차 있지 않은 사지방 PC의 CPU로 Transformer 모델을 학습시켜보고 싶은 약간의 도전정신(?) 또한 이 프로젝트를 진행하는 동기가 됨.
 
@@ -452,6 +452,133 @@ $$
 
 ---
 
+## 📋 Prerequisites
+
+### 📊 SGB PC Specs
+
+군 복무를 하였던 자대 내 사지방의 PC 사양은 다음과 같다.
+
+| 항목      | 수치                         |
+|-----------|------------------------------|
+| **CPU**   | Intel Core i5-8600 @ 3.10GHz |
+| **FLOPS** | 297.6 GFLOPS (FP32)          |
+| **RAM**   | 8GB                          |
+
+### 📚 Dataset
+
+학습할 데이터셋으로는 *songys* 님의 GitHub 레포지토리 [`Chatbot_data`](https://github.com/songys/Chatbot_data)에 업로드 되어있는 소규모의 한국어 문답 데이터셋을 사용하였다. 
+
+- 총 데이터 수: **11,823**
+- 총 단어 수: **8,192**
+
+**예시 데이터 샘플**
+
+```txt
+Q: 스터디 하는데 괜찮은 사람 있어?
+A: 하라는 공부는 안하고!
+```
+
+```txt
+Q: 사업 시작해도 될까?
+A: 확신이 있을 때 시작해보세요.
+```
+
+### 🧰 Model Configurtation
+
+학습할 모델은 다음과 같은 구성(config)을 가진 모델을 사용하였다.
+
+| 구성             | 값          |
+|------------------|-------------|
+| **Type**         | Transformer |
+| **# of Layers**  | 2           |
+| **# of Heads**   | 8           |
+| **$d_{model}$**  | 256         |
+| **$d_{ff}$**     | 512         |
+| **Dropout Rate** | 0.1         |
+
+### 🚀 Training Hyperparameters
+
+모델 학습에 대한 하이퍼파라미터는 다음과 같다.
+
+| 하이퍼파라미터           | 값             |
+|-------------------------|----------------|
+| **# of Epochs**         | 50             |
+| **Batch Size**          | 64             |
+| **Valid Ratio**         | 0.1            |
+| **Max Seq. Length**     | 40             |
+| **Optimizer**           | Adam           |
+| **Scheduler**           | Noam Scheduler |
+| **LR Warmup-Steps**     | 4000           |
+| **Grad Clip Value**     | 1.0            |
+| **Early Stop Patience** | 5              |
+
+---
+
 ## 💻 Code Implementation
 
-*To be continued ...*
+### 0️⃣ Module Import
+
+```python
+import os
+import math
+from pathlib import Path
+
+# Lucid 버전 2.7.8
+import lucid
+import lucid.nn as nn
+import lucid.nn.functional as F
+import lucid.optim as optim
+
+from lucid.data import TensorDataset, DataLoader, random_split
+from lucid.models.util import summarize
+from lucid._tensor import Tensor
+
+# 데이터 전처리용 토크나이저 라이브러리
+from tokenizers import Tokenizer
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from tqdm import tqdm
+```
+
+재구현을 위한 전역 랜덤 시드는 `42`, 디바이스는 `"cpu"`를 사용하였다.
+
+```python
+lucid.random.seed(42)
+
+device: lucid.types._DeviceType = "cpu"
+```
+
+### 1️⃣ Positional Encoding Class
+
+앞서 설명한 위치 인코딩(positional encoding)을 구현하였다.
+
+```python
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+
+        pe = lucid.zeros(max_len, d_model)
+        position = lucid.arange(0, max_len, dtype=lucid.Float32).unsqueeze(axis=1)
+        div_term = lucid.exp(
+            lucid.arange(0, d_model, 2, dtype=lucid.Float32)
+            * (-lucid.log(1e4) / d_model)
+        )
+
+        pe[:, 0::2] = lucid.sin(position * div_term)
+        pe[:, 1::2] = lucid.cos(position * div_term)
+
+        pe = pe.unsqueeze(axis=0)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: Tensor) -> Tensor:
+        seq_len = x.shape[1]
+        x += self.pe[:, :seq_len, :]
+        return self.dropout(x)
+```
+
+256차원의 positional encoding 값을 시각적으로 나타내면 다음과 같은 패턴이 나타난다.
+
+[Positional Encoding](./fig/pe.png)
