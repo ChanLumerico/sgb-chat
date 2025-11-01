@@ -419,7 +419,11 @@ $$
 학습 시에는 **teacher forcing** 으로 정답 시퀀스를 한 시점씩 shift하여 다음 토큰을 예측하게 하고, Cross-Entorypy Loss를 사용한다.
 
 $$
-\mathcal{L}= -\sum_{t=1}^{T_{\text{tgt}}}\log P\Big(y_{t}^{\star}\Big|y_{<t}^{\star},\text{EncOut}\Big)
+\mathcal{L}
+= -\sum_{t=1}^{T_{\text{tgt}}}
+\log P\!\left(
+    y_{t}^{\star} \,\middle|\, y_{<t}^{\star},\, \text{EncOut}
+\right)
 $$
 
 여기서 $y_t^*$는 정답 토큰이다.
