@@ -421,8 +421,8 @@ $$
 $$
 \mathcal{L}
 = -\sum_{t=1}^{T_{\text{tgt}}}
-\log P\!\left(
-    y_{t}^{\star} \,\middle|\, y_{<t}^{\star},\, \text{EncOut}
+\log P\left(
+    y_{t}^{\star} \mid y_{<t}^{\star},\, \text{EncOut}
 \right)
 $$
 
