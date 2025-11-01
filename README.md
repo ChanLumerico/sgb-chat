@@ -98,7 +98,7 @@ $$
 - 즉, 어떤 차원은 *"느리게 변하는 위치 정보"*, 어떤 차원은 *"빠르게 변하는 미세 위치 정보"* 를 담는다.
 - 이 조합으로 모델은 상대적 거리 정보까지 유추할 수 있다.
 
-  즉, $\text{PE}(t+k)-\text{PE}(t)$가 일정한 구조를 갖는다 $\rightarrow$ "$k$ 만큼 떨어져 있음" 을 계산 가능하다.
+  즉, $\text{PE}(t+k)-\text{PE}(t)$가 일정한 구조를 갖는다 $\rightarrow$ $k$ 만큼 떨어져 있음 을 계산 가능하다.
 
 #### 🔹 Implementation Perspective
 
@@ -195,7 +195,7 @@ $$
 \mathbf{A}=\text{softmax}(\tilde{\mathbf{S}})\in\mathbb{R}^{T\times T}
 $$
 
-이 $\mathbf{A}$는 "$t$ 번째 토큰이 $s$ 번째 토큰에 얼마나 집중(attend)하는가" 를 나타내는 **attention matrix** 이다.
+이 $\mathbf{A}$는 $t$ 번째 토큰이 $s$ 번째 토큰에 얼마나 집중(attend)하는가 를 나타내는 **attention matrix** 이다.
 
 #### 🔸 Output Vector via Weighted-Sum
 
@@ -419,7 +419,7 @@ $$
 학습 시에는 **teacher forcing** 으로 정답 시퀀스를 한 시점씩 shift하여 다음 토큰을 예측하게 하고, Cross-Entorypy Loss를 사용한다.
 
 $$
-\mathcal{L}=-\sum_{t=1}^{T_{tgt}}\log P(y_t^\star~|~y_{<t}^\star,\text{EncOut})
+\mathcal{L}= -\sum_{t=1}^{T_{\text{tgt}}}\log P\Big(y_{t}^{\star}\Big|y_{<t}^{\star},\text{EncOut}\Big)
 $$
 
 여기서 $y_t^*$는 정답 토큰이다.
