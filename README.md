@@ -1195,6 +1195,8 @@ batch_losses, epoch_losses, val_epoch_losses = train(
 )
 ```
 
+학습된 파라미터는 `out/lucid_trained.safetensors`에 저장되어있다.
+
 ### 8️⃣ Evaluation
 
 주어진 인풋 문장을 모델에 입력하여 다음 토큰을 예측하는 함수를 구현하였다.
