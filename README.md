@@ -413,7 +413,7 @@ $$
 이후, softmax를 이용해 다음 단어의 확률을 구한다.
 
 $$
-P(\text{token}_t=v~|~\text{context})=\frac{\exp\left(\text{Logits}_{t,v}\right)}{\sum_{u=1}^V\exp\left(\text{Logits}_{t,u}\right)}
+P(\text{token}_t=v\mid\text{context})=\frac{\exp\left(\text{Logits}_{t,v}\right)}{\sum_{u=1}^V\exp\left(\text{Logits}_{t,u}\right)}
 $$
 
 학습 시에는 **teacher forcing** 으로 정답 시퀀스를 한 시점씩 shift하여 다음 토큰을 예측하게 하고, Cross-Entorypy Loss를 사용한다.
@@ -697,7 +697,7 @@ $$
 W_{ij}\sim\mathcal{U}(-a,a),\quad\text{where}\quad a=\sqrt{\frac{6}{n_{in}+n_{out}}}
 $$
 
-임베딩 레이어 모듈 `nn.Embedding`의 가중치 초기화는 표준정규분포($\mathcal{N}(0,1)$)를 사용하였다.
+임베딩 레이어 모듈 `nn.Embedding`의 가중치 초기화는 표준정규분포( $\mathcal{N}(0,1)$ )를 사용하였다.
 
 ### 3️⃣ Noam Scheduler Class
 
@@ -775,7 +775,7 @@ dataset = TensorDataset(src, dec_inputs, dec_labels)
 dataset.to(device)
 ```
 
-마지막으로 훈련용 데이터셋과 검증용 데이터셋을 분리하였다.
+다음으로 훈련용 데이터셋과 검증용 데이터셋을 분리하였다.
 
 ```python
 val_ratio = 0.1
@@ -784,4 +784,413 @@ n_val = int(n_total * val_ratio)
 n_train = n_total - n_val
 
 train_set, valid_set = random_split(dataset, [n_train, n_val])
+```
+
+기본적인 모델 하이퍼파라미터는 다음과 같이 설정하였다.
+
+```python
+batch_size = 64
+num_epochs = 50
+num_layers = 2
+d_model = 256
+num_heads = 8
+dim_feedforward = 512
+dropout = 0.1
+```
+
+마지막으로, 학습에 사용될 `DataLoader` 인스턴스를 생성하였다.
+
+```python
+train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+valid_loader = DataLoader(valid_set, batch_size=batch_size, shuffle=False)
+```
+
+### 5️⃣ Model Construction
+
+```python
+model = Transformer(
+    src_vocab_size=vocab_size,
+    tgt_vocab_size=vocab_size,
+    d_model=d_model,
+    num_heads=num_heads,
+    num_encoder_layers=num_layers,
+    num_decoder_layers=num_layers,
+    dim_feedforward=dim_feedforward,
+    dropout=dropout,
+).to(device)
+```
+
+`lucid.models` 내장 함수인 `summarize`를 이용해 모델 구조를 출력하면 다음과 같다.
+
+```python
+summarize(model, input_shape=[(1, max_length), (1, max_length)])
+```
+
+```txt
+                                    Summary of Transformer                                     
+===============================================================================================
+Layer                               Input Shape           Output Shape          Parameter Size
+===============================================================================================
+Transformer                         (1, 40)               (1, 40, 8192)         8,928,256   
+├── Linear                          (1, 40, 256)          (1, 40, 8192)         2,097,152   
+├── Transformer                     None                  (1, 40, 256)          2,636,800   
+├── TransformerDecoder              (1, 40, 256)          (1, 40, 256)          1,582,080   
+│   ├── LayerNorm                   (1, 40, 256)          (1, 40, 256)          512         
+│   │   ├── TransformerDecoderLa... (1, 40, 256)          (1, 40, 256)          790,784     
+│   │   │   ├── LayerNorm           (1, 40, 256)          (1, 40, 256)          512         
+│   │   │   ├── Dropout             (1, 40, 256)          (1, 40, 256)          -
+│   │   │   ├── Linear              (1, 40, 512)          (1, 40, 256)          131,328     
+│   │   │   ├── Dropout             (1, 40, 512)          (1, 40, 512)          -
+│   │   │   ├── Linear              (1, 40, 256)          (1, 40, 512)          131,584     
+│   │   │   ├── LayerNorm           (1, 40, 256)          (1, 40, 256)          512         
+│   │   │   ├── Dropout             (1, 40, 256)          (1, 40, 256)          -
+│   │   │   ├── MultiHeadAttention  (1, 40, 256)          (1, 40, 256)          263,168     
+│   │   │   │   ├── Linear          (1, 40, 256)          (1, 40, 256)          65,792      
+│   │   │   │   ├── Linear          (1, 40, 256)          (1, 40, 256)          65,792      
+│   │   │   │   ├── Linear          (1, 40, 256)          (1, 40, 256)          65,792      
+│   │   │   │   ├── Linear          (1, 40, 256)          (1, 40, 256)          65,792      
+│   │   │   ├── LayerNorm           (1, 40, 256)          (1, 40, 256)          512         
+│   │   │   ├── Dropout             (1, 40, 256)          (1, 40, 256)          -
+
+                                   ... and more 59 layer(s)                                    
+===============================================================================================
+Total Layers(Submodules): 75
+Total Parameters: 8,928,256 (8.93M)
+Total FLOPs: 198,056,080 (198.06M)
+===============================================================================================
+```
+
+이 프로젝트에 사용될 transformer 모델의 파라미터 수는 **8,928,256** 개 이다.
+
+### 6️⃣ Loss Function
+
+모델 학습을 위한 손실 함수를 다음과 같이 설정하였다.
+
+트랜스포머 모델의 학습에서는 주로 *교차 엔트로피(cross-entropy)* 를 시퀀스 단위로 확장한 **Sequence Cross-Entropy** 를 사용한다.
+
+#### 💡 Sequence Cross Entropy
+
+단일 시점에서의 분류(classification) 문제에서 **교차 엔트로피 손실** 은 다음과 같이 정의된다.
+
+$$
+\mathcal{L}=-\sum_{c=1}^C y_c\log p_c
+$$
+
+- $C$: 클래스 개수
+- $y_c$: 정답(one-hot) 벡터
+- $p_c$: 모델의 예측 확률 (softmax 결과)
+
+즉, 모델이 정답 클래스에 얼마나 확신을 가지는지를 음의 로그로 측정하는 것이다.
+
+정답 클래스 $k$에 대해서는 단순히
+
+$$
+\mathcal{L}=-\log p_k
+$$
+
+가 된다.
+
+트랜스포머는 단어 단위로 확률 분포를 출력한다.
+
+입력 시퀀스가 $\mathbf{X}=\left(x_1,x_2,\ldots,x_T\right)$ 이고, 타겟 시퀀스가 $\mathbf{Y}=\left(y_1,y_2,\ldots,y_T\right)$ 라고 하면, 모델은 각 시점 $t$에서 확률 분포 $p_\theta\left(y_t\mid y_{<t}, \mathbf{X}\right)$ 를 예측한다.
+
+그에 대한 **시퀀스 전체 손실** 은 다음과 같다.
+
+$$
+\mathcal{L}_{seqce}(\mathbf{X},\mathbf{Y};\theta)=-\frac{1}{T}\sum_{t=1}^T\log p_\theta\left(y_t\mid y_{<t},\mathbf{X}\right)
+$$
+
+- $T$: 시퀀스 길이
+- $\theta$: 모델의 파라미터
+- $y_{<t}$: 이전 단어들의 시퀀스
+
+즉, 각 시점별 cross-entropy를 구한 뒤 평균을 낸 것이다. 이 식은 언어모델(Language Model; LM)이나 번역 모델의 **teacher forcing** 학습 시 매우 일반적으로 사용된다.
+
+트랜스포머의 출력 로짓(logit) $z_t\in\mathbb{R}^C$ 에 대해 softmax를 취하면 다음과 같다.
+
+$$
+p_\theta\left(y_t=c\mid y_{<t},\mathbf{X}\right)=\frac{\exp(z_{t,c})}{\sum_{c'}\exp(z_{t,c'})}
+$$
+
+이를 손실에 대입하면:
+
+$$
+\mathcal{L}_{seqce}=-\frac{1}{T}\sum_{t=1}^T\log\frac{\exp(z_{t,c})}{\sum_{c'}\exp(z_{t,c'})}=-\frac{1}{T}\sum_{t=1}^T\left(z_{t,y_t}-\log\sum_{c'}\exp(z_{t,c'})\right)
+$$
+
+이는 일반적인 **log-softmax** 형태의 손실과 동일하다.
+
+시퀀스 데이터에서는 문장의 길이가 다르기 때문에, 보통 `[PAD]` 토큰으로 채운다. 이때 손실 계산 시 패딩 토큰을 무시해야 한다.
+
+이를 위해 마스크 $m_t\in\{0,1\}$ 를 정의하면:
+
+$$
+\mathcal{L}_{seqce}=-\frac{1}{\sum_t m_t}\sum_{t=1}^T m_t\log p_\theta\left(y_t\mid y_{<t},\mathbf{X}\right)
+$$
+
+즉, **실제 단어** 에만 손실을 계산하고 평균을 낸다. 이를 코드로 구현하면 다음과 같다:
+
+```python
+def seq_ce_loss(logits: Tensor, targets: Tensor, pad_id: int = 0) -> Tensor:
+    B, T, V = logits.shape
+    logits_2d = logits.reshape(B * T, V)
+    targets_1d = targets.reshape(B * T)
+
+    loss = F.cross_entropy(
+        logits_2d, targets_1d, reduction=None, ignore_index=pad_id  # 마스킹
+    )
+
+    valid = (targets_1d != pad_id).astype(lucid.Float32)
+    return (loss * valid).sum() / (valid.sum() + 1e-8)
+```
+
+추가적으로 **정확도(accuracy)** 함수는 다음과 같이 구현하였다.
+
+```python
+@lucid.no_grad()
+def token_accuracy(logits: Tensor, targets: Tensor, pad_id: int = 0) -> Tensor:
+    preds = lucid.argmax(logits, axis=-1)
+    mask = targets != pad_id
+    
+    correct = ((preds == targets) & mask).sum()
+    total = mask.sum().item()
+    return correct / max(1, total)
+```
+
+정확도는 단순 확인용 metric이므로 **gradient 트래킹을 정지** 한 채(`@lucid.no_grad()`) 계산한다.
+
+다음으로, 일반적인 손실 계산을 위해 다음 함수 또한 추가하였다.
+
+```python
+@lucid.no_grad()
+def evaluate_loss(model: nn.Module, dataloader: DataLoader, pad_id: int = 0) -> Tensor:
+    model.eval()
+    total, count = 0.0, 0
+    for src, dec_inp, dec_out in dataloader:
+        src, dec_inp, dec_out = src.to(device), dec_inp.to(device), dec_out.to(device)
+
+        logits = model(
+            src=src,
+            tgt=dec_inp,
+            src_pad_mask=(src == pad_id),
+            tgt_pad_mask=(dec_inp == pad_id),
+        )
+        loss = seq_ce_loss(logits, dec_out, pad_id)
+
+        total += loss
+        count += 1
+    return total / max(1, count)
+```
+
+### 7️⃣ Training
+
+체크포인트를 저장하는 함수는 다음과 같다.
+
+모델과 옵티마이저, 스케쥴러의 `state-dict`와 훈련(per batch/epoch) 간 쌓인 손실 값들을 같이 저장한다.
+
+```python
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler,
+    epoch: int,
+    epoch_loss: float,
+    batch_losses: list[float],
+    epoch_losses: list[float],
+    val_epoch_losses: list[float] | None = None,
+    path: Path = "../checkpoints",
+) -> None:
+    os.makedirs(path, exist_ok=True)
+    checkpoint = dict(
+        model_state_dict=model.state_dict(),
+        optimizer_state_dict=optimizer.state_dict(),
+        scheduler_state_dict=scheduler.state_dict() if scheduler else None,
+        epoch=epoch,
+        epoch_loss=epoch_loss,
+        batch_losses=batch_losses,
+        epoch_losses=epoch_losses,
+        val_epoch_losses=val_epoch_losses,
+    )
+    lucid.save(checkpoint, os.path.join(path, f"epoch_{epoch}"))
+```
+
+저장된 체크포인트는 다음 함수로 불러온다.
+
+```python
+def load_latest_checkpoint(
+    ckpt_dir: Path, 
+    model: nn.Module, 
+    optimizer: optim.Optimizer, 
+    scheduler: optim.lr_scheduler.LRScheduler,
+) -> tuple[int, list[float], list[float], list[float]]:
+    if not os.path.exists(ckpt_dir):
+        return 1, [], [], []
+    
+    ckpts = [f for f in os.listdir(ckpt_dir) if f.endswith(".lcd")]
+    if not ckpts:
+        return 1, [], [], []
+    
+    latest_ckpt = sorted(ckpts, key=lambda x: int(x.split("_")[1].split(".")[0]))[-1]
+    checkpoint = lucid.load(os.path.join(ckpt_dir, latest_ckpt))
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    if scheduler and checkpoint["scheduler_state_dict"]:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    
+    print(f"Loaded checkpoint from epoch {checkpoint["epoch"]}.")
+    return (
+        checkpoint["epoch"] + 1,
+        checkpoint.get("batch_losses", []),
+        checkpoint.get("epoch_losses", []),
+        checkpoint.get("val_epoch_losses", []),
+    )
+```
+
+모델 훈련 함수는 다음과 같이 구현하였다.
+
+```python
+def train(
+    model: nn.Module,
+    dataloader: DataLoader,
+    optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler | None = None,
+    pad_id: int = 0,
+    device: str = "cpu",
+    epochs: int = 50,
+    grad_clip: int | None = None,
+    ckpt_dir: Path = "../checkpoints",
+    start_epoch: int = 1,
+    batch_losses: list[float] | None = None,
+    epoch_losses: list[float] | None = None,
+    val_loader: DataLoader | None = None,
+    early_stop_patience: int | None = None,
+) -> tuple[list[float], list[float], list[float]]:
+    model.to(device)
+    batch_losses = [] if batch_losses is None else list(batch_losses)
+    epoch_losses = [] if epoch_losses is None else list(epoch_losses)
+
+    val_epoch_losses = []
+    best_val = float("inf")
+    bad_epochs = 0
+
+    for epoch in range(start_epoch, epochs + 1):
+        model.train()
+        total_loss, total_acc = 0.0, 0.0
+        n_batches = len(dataloader)
+
+        progress = tqdm(
+            dataloader, desc=f"Epoch {epoch}/{epochs}", leave=True, ncols=100, dynamic_ncols=True
+        )
+        for step, (src, dec_inp, dec_out) in enumerate(progress, start=1):
+            src, dec_inp, dec_out = src.to(device), dec_inp.to(device), dec_out.to(device)
+
+            logits = model(
+                src=src, tgt=dec_inp, src_pad_mask=src == pad_id, tgt_pad_mask=dec_inp == pad_id
+            )
+            loss = seq_ce_loss(logits, dec_out, pad_id)
+
+            optimizer.zero_grad()
+            loss.backward()
+            if grad_clip:
+                nn.util.clip_grad_norm(model.parameters(), max_norm=grad_clip)
+            
+            optimizer.step()
+            if scheduler:
+                scheduler.step()
+            
+            acc = token_accuracy(logits, dec_out, pad_id)
+            total_loss += loss.item()
+            total_acc += acc.item()
+            batch_losses.append(loss.item())
+
+            progress.set_postfix(
+                {
+                    "loss": f"{total_loss / step:.4f}",
+                    "acc": f"{total_acc / step:.4f}",
+                    "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+                }
+            )
+        
+        train_epoch_loss = total_loss / n_batches
+        epoch_losses.append(train_epoch_loss)
+
+        if val_loader is not None:
+            val_loss = evaluate_loss(model, val_loader, pad_id=pad_id).item()
+            val_epoch_losses.append(val_loss)
+
+            print(
+                f"Epoch {epoch}/{epochs} Valid Loss: {val_loss:.4f} | "
+                f"Perplexity: {math.exp(val_loss)}"
+            )
+
+            if val_loss < best_val:
+                best_val = val_loss
+                bad_epochs = 0
+            else:
+                bad_epochs += 1
+                if (early_stop_patience is not None) and (bad_epochs >= early_stop_patience):
+                    print(
+                        f"Early stopping at epoch {epoch} "
+                        f"(no val. improvement for {bad_epochs} epochs)."
+                    )
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        scheduler,
+                        epoch,
+                        train_epoch_loss,
+                        batch_losses,
+                        epoch_losses,
+                        val_epoch_losses,
+                        path=ckpt_dir,
+                    )
+                    return batch_losses, epoch_losses, val_epoch_losses
+        
+        save_checkpoint(
+            model,
+            optimizer,
+            scheduler,
+            epoch,
+            train_epoch_loss,
+            batch_losses,
+            epoch_losses,
+            val_epoch_losses,
+            path=ckpt_dir,
+        )
+
+    return batch_losses, epoch_losses, val_epoch_losses
+```
+
+이후, 옵티마이저와 스케쥴러를 선언하였다.
+
+```python
+optimizer = optim.Adam(model.parameters(), lr=1.0, betas=(0.9, 0.98), eps=1e-9)
+scheduler = NoamScheduler(optimizer, d_model=d_model, warmup_steps=4000)
+```
+
+본격적으로 transformer 모델 훈련을 진행해보자.
+
+```python
+start_epoch, batch_losses, epoch_losses, val_epoch_losses = load_latest_checkpoint(
+    ckpt_dir="../checkpoints", model=model, optimizer=optimizer, scheduler=scheduler,
+)
+
+batch_losses, epoch_losses, val_epoch_losses = train(
+    model,
+    dataloader=train_loader,
+    optimizer=optimizer,
+    scheduler=scheduler,
+    pad_id=PAD_ID,
+    device=device,
+    epochs=num_epochs,
+    grad_clip=1.0,
+    ckpt_dir="../checkpoints",
+    start_epoch=start_epoch,
+    batch_losses=batch_losses,
+    epoch_losses=epoch_losses,
+    val_loader=valid_loader,
+    early_stop_patience=5,
+)
 ```
