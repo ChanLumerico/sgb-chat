@@ -910,7 +910,7 @@ $$
 
 $$
 p_\theta(y_t = c \mid y_{<t}, \mathbf{X})
-= \frac{\exp(z_{t,c})}{\sum_{c'} \exp(z_{t,c'})}
+= \frac{\exp(z_{t,c})}{\sum_{k} \exp(z_{t,k})}
 $$
 
 이를 손실에 대입하면:
