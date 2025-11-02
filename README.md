@@ -909,7 +909,7 @@ $$
 트랜스포머의 출력 로짓(logit) $z_t\in\mathbb{R}^C$ 에 대해 softmax를 취하면 다음과 같다.
 
 $$
-p_\theta(y_t = c \mid y_{\le t}, \mathbf{X}) = \frac{\exp(z_{t,c})}{\sum_{k} \exp(z_{t,k})}
+p_\theta(y_t = c \mid y_{\lt t}, \mathbf{X}) = \frac{\exp(z_{t,c})}{\sum_{k} \exp(z_{t,k})}
 $$
 
 이를 손실에 대입하면:
@@ -1194,3 +1194,181 @@ batch_losses, epoch_losses, val_epoch_losses = train(
     early_stop_patience=5,
 )
 ```
+
+### 8️⃣ Evaluation
+
+주어진 인풋 문장을 모델에 입력하여 다음 토큰을 예측하는 함수를 구현하였다.
+
+```python
+@lucid.no_grad()
+def evaluate(sentence: str) -> list[int]:
+    model.eval()
+    sentence_ids = tokenizer.encode(sentence).ids
+    src = Tensor(
+        [[START_ID] + sentence_ids + [END_ID]], dtype=lucid.Int32, device=device
+    )
+
+    output = Tensor([[START_ID]], dtype=lucid.Int32, device=device)
+    for _ in range(max_length):
+        src_pad_mask = src == tokenizer.token_to_id("[PAD]")
+        tgt_pad_mask = output == tokenizer.token_to_id("[PAD]")
+
+        tgt_mask = model.transformer.generate_square_subsequent_mask(output.shape[1])
+        tgt_mask = tgt_mask.to(device)
+
+        logits = model(
+            src=src,
+            tgt_inp=output,
+            src_pad_mask=src_pad_mask,
+            tgt_pad_mask=tgt_pad_mask,
+            tgt_mask=tgt_mask,
+        )
+
+        next_token_logits = logits[:, -1, :]
+        predicted_id = next_token_logits.argmax(axis=-1).item()
+
+        if predicted_id == END_ID:
+            break
+
+        next_token = Tensor([[predicted_id]], device=device)
+        output = lucid.concatenate([output, next_token], axis=-1)
+
+    return output.squeeze(0).tolist()
+```
+
+이후, 예측한 토큰 ID를 토크나이저를 이용해 단어로 decode해주는 함수 또한 구현하였다.
+
+```python
+@lucid.no_grad()
+def predict(sentence: str) -> str:
+    predicted_ids = evaluate(sentence)
+    decoded = tokenizer.decode(
+        [i for i in predicted_ids if i < tokenizer.get_vocab_size()]
+    )
+    return decoded
+```
+
+---
+
+## 🧪 Testing
+
+```txt
+In: 안녕?
+Out: 안녕하세요 .
+```
+
+```txt
+In: 커피가 마시고 싶네
+Out: 달달한 시 럽 을 추가 해보세요 .
+```
+
+```txt
+In: 알바 한번 구해볼까?
+Out: 좋아요 !
+```
+
+```txt
+In: 어떤 영화 볼까 추천해줘
+Out: 최신 영화가 좋을 것 같아요 .
+```
+
+```txt
+In: 전역할 때까지 언제 기다리지
+Out: 군대 시계는 멈추지 않아요 .
+```
+
+가끔 이상한 답변을 내놓긴 하지만 생각보단 나쁘지 않은 것 같다.
+
+---
+
+## 🔬 Analysis
+
+### 👬 Lucid & Torch Comparison
+
+동일한 모델 구조, 하이퍼파라미터, 옵티마이저 등과 같은 조건하에서 **Torch** 로 학습한 결과를 **Lucid** 와 비교하였을 때 다음과 같은 Loss curve가 나타나였다.
+
+![Loss Comparison](./fig/loss_comparison.png)
+
+동일한 설정을 사용했음에도 Torch 모델이 Lucid보다 **전 구간에서 더 낮은 loss를 유지한다**는 점은, 문제의 원인을 *“학습 세팅 차이”* 가 아니라 **Lucid 구현 내부의 세부적 구조 차이**로 좁혀준다.
+
+두 곡선 모두 빠르게 감소한 뒤 **점진적으로 0 근처까지 수렴**하고, Noam 스케줄러 특유의 **진동 패턴**(oscillation; warmup 이후 step에 따라 진폭이 줄어드는 형태)이 양쪽에서 거의 동일하게 나타난다는 사실은 Lucid의 forward/backward 계산, 스케줄러, gradient clipping, 그리고 Adam 옵티마이저 로직이 전반적으로 안정적으로 작동하고 있음을 보여준다.
+
+그러나 Lucid 곡선이 Torch보다 **항상 일정한 오프셋을 두고 평행하게 높은 손실값을 유지**한다는 점은, 학습 과정의 안정성은 확보되어 있으나 **gradient의 효율적인 전달이나 초기 분포의 스케일링** 면에서 미묘한 불일치가 존재함을 시사한다.
+
+이러한 격차는 주로
+
+1. **파라미터 초기화 스케일** (예: *Linear*, *Embedding*, *Xavier* 초기화 계열의 분포 차이),
+2. **LayerNorm 구현 세부차이** (eps, weight/bias 초기화, pre-norm/post-norm 적용 시점),
+3. **loss 계산의 축 정규화 방식** (배치, 시퀀스, vocab 평균 차이)에서 비롯될 가능성이 높다.
+
+추가적으로, Lucid의 **autodiff 엔진 자체의 gradient 전달 과정** 에서 작은 오차(예: `mean` backward 시 축 스케일링 계수 누락, 브로드캐스트 방향 mismatch, 또는 일부 연산의 `requires_grad` 타이밍 문제)가 존재할 경우, 각 스텝의 gradient magnitude가 체계적으로 약화되어 학습은 되지만 Torch보다 항상 낮은 gradient efficiency를 보이게 된다.
+
+결론적으로 Lucid는 학습 안정성과 수렴 특성 면에서 **신뢰할 만한 수준**에 도달했지만, Torch 대비 손실 격차가 지속되는 원인은 **초기화, 정규화, 손실 계산 스케일링**, 그리고 **autodiff 엔진의 수치적 미세 불일치** 가 복합적으로 누적된 결과로 해석된다.
+
+### ⏰ Training Time Comparison
+
+이번 실험에서 Lucid와 Torch 모두 동일한 Transformer 구조 및 하이퍼파라미터 설정을 사용했음에도, 훈련 시간 면에서 Torch가 약 **1.75배 더 빠른** 처리 속도를 보였다.
+
+| 라이브러리 | 평균 sec/batch | 전체 훈련 시간       |
+|-----------|----------------|---------------------|
+| **Lucid** | 2.58 sec/batch | 5.98 hrs            |
+| **Torch** | 1.47 sec/batch | 3.41 hrs            |
+
+이 시간 차이는 주로 PyTorch의 **C++ 기반** 연산 최적화와 Lucid의 **NumPy 중심 연산** 및 **Python-level autodiff 구조** 간의 근본적 차이에서 기인하는 것으로 보인다.
+
+### 🌸 Further Improvements
+
+1. **초기화 일관성 확보**
+
+   * `lucid.nn.init` 모듈을 PyTorch의 `torch.nn.init` 함수군(Xavier/Kaiming 등)과 수식 단위로 일치시킬 것.
+   * 모든 `Linear`, `Embedding`, `Attention Projection` 계층의 bias를 **0으로 초기화**하고, `gain` 파라미터 적용 방식 검증.
+   * Torch의 `fan_in`, `fan_out` 계산 로직을 그대로 반영하여 초기 분포 스케일을 동일하게 유지.
+
+2. **LayerNorm 수식 정합성 강화**
+
+   * PyTorch의 `torch.nn.functional.layer_norm`을 기준으로 mean/var 계산식을 **정확히 일치**시킬 것.
+   * eps 기본값을 `1e-5`로 통일하고, `var = mean((x - μ)**2)` 형태로 명시적 정의.
+   * normalization 위치(pre-norm/post-norm)를 옵션화하여 Transformer 구조의 변형 실험 시 명시적으로 지정 가능하게 개선.
+
+3. **CrossEntropyLoss 수치 안정화**
+
+   * `logsumexp` 기반으로 log-softmax를 계산하여 **overflow-free** 구현 보장.
+   * 손실 계산 시 평균 축을 Torch와 동일하게 처리하여 loss 스케일 일관성 유지.
+
+4. **Attention 연산 검증**
+
+   * softmax 전 `scores -= max(scores)` 안정화 추가.
+   * causal 및 padding mask 브로드캐스트 방향과 dtype(`float32`) 일관성 점검.
+   * attention output shape 및 gradient 흐름을 Torch 기준으로 비교 검증.
+
+5. **Autodiff 핵심 연산 backward 검증**
+
+   * `mean`, `sum`, `matmul`, `einsum` 등의 backward 연산에서 gradient 스케일링 계수(`1/N` 등)가 정확히 포함되는지 검증.
+   * 브로드캐스트 방향 mismatch나 in-place 연산으로 인한 gradient 누락 여부 점검.
+   * PyTorch 대비 gradient L2 오차 테스트를 자동화하여 autodiff 엔진 정확도 측정 체계 구축.
+   * 특히 NumPy 기반 Lucid의 경우, 불필요한 copy 연산이나 중간 텐서 누락을 최소화하면 **CPU 효율** 이 크게 개선될 여지가 있음.
+
+6. **Optimizer 및 Scheduler 동기화 개선**
+
+   * grad clipping을 **global norm 기준** ( $\sqrt{\Sigma \|g_i\|^2}\le 1.0$ ) 으로 통일하여 layer별 clip 편차 제거.
+   * learning rate 로그 출력을 통해 실제 step별 lr 변화가 PyTorch와 동일하게 유지되는지 시각적으로 검증.
+
+---
+
+## ⭐ Conclusion
+
+본 프로젝트는 `Lucid` 프레임워크의 Transformer 구현을 PyTorch와 동일한 조건하에서 비교/분석함으로써, Lucid의 **학습 안정성, 수치 정합성, 그리고 실행 효율성**을 실험적으로 평가하였다.
+
+두 모델은 모두 빠른 초기 수렴과 Noam 스케줄러 특유의 진동 패턴을 안정적으로 재현하였으며, 이는 Lucid의 **forward/backward 연산, 옵티마이저, 스케줄러, gradient clipping 로직이 정상적으로 작동함**을 입증한다.
+
+다만, Torch 모델이 전 구간에서 Lucid보다 **일관되게 낮은 손실값을 유지**했다는 점은, 단순한 학습 세팅 차이가 아닌 **Lucid 내부 구현 수준의 세부적 수치 불일치**에 기인한 것으로 보인다. 
+
+주된 원인은 파라미터 초기화 스케일, LayerNorm 계산식, CrossEntropyLoss 평균 축, Autodiff backward 스케일링 등의 미세한 차이일 가능성이 높으며, 이는 동일 step 대비 학습 효율의 손실로 이어졌다.
+
+또한 성능 측면에서 Torch가 평균 **1.47 sec/batch**, Lucid가 **2.58 sec/batch**로 약 1.75배 빠른 처리 속도를 보였지만, 이는 **PyTorch의 C++ 백엔드 최적화** 에 비해 Lucid가 **순수 NumPy 기반 Python 레벨 연산으로 수행** 되었음을 감안할 때, 오히려 Lucid의 구조적 효율성이 상당히 높은 결과로 해석된다.
+
+특히 이러한 성과가 **군 사지방의 저사양 CPU 환경** 에서 달성되었다는 점은, Lucid의 경량성과 내구성을 실질적으로 입증한 사례로 볼 수 있다.
+
+결과적으로 Lucid는 **자체 학습 및 연구용 프레임워크로** 서 충분한 기능적 완성도와 학습 안정성을 보여주었다. 앞으로는 PyTorch와의 세부적 수식 동기화, gradient 검증 체계 보완, 그리고 연산 효율 개선 등을 통해 Lucid의 내부 신뢰도를 높이는 방향으로 발전시킬 수 있을 것이다.
+
+Lucid는 거대한 production-ready 프레임워크를 지향하기보다는, 딥러닝의 작동 원리를 **직접 구현** 하며 이해하기 위한 *개인 학습 도구로서의 목적* 을 충실히 달성했다는 점에서 그 의의가 있다.
