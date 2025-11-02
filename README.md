@@ -1,6 +1,6 @@
 # 🤖 SGB-Chat
 
-대한민국 군 병영시설 중 하나인 *사이버지식정보방(이하 사지방)* 에서 군 생활동안 **직접 개발**한 NumPy/MLX 기반 딥러닝 프레임워크인 [`💎Lucid`](https://github.com/ChanLumerico/lucid)의 실질적인 성능 검증을 위해 수행한 간단한 채팅용 Transformer 모델 학습 ( (Velog)[https://velog.io/@lumerico284/Project-%EA%B5%B0-%EC%82%AC%EC%A7%80%EB%B0%A9-PC%EB%A1%9C-Transformer-%ED%95%99%EC%8A%B5%EC%8B%9C%ED%82%A4%EA%B8%B0-SGB-Chat] )
+대한민국 군 병영시설 중 하나인 *사이버지식정보방(이하 사지방)* 에서 군 생활동안 **직접 개발**한 NumPy/MLX 기반 딥러닝 프레임워크인 [`💎Lucid`](https://github.com/ChanLumerico/lucid)의 실질적인 성능 검증을 위해 수행한 간단한 채팅용 Transformer 모델 학습 ([Velog](https://velog.io/@lumerico284/Project-%EA%B5%B0-%EC%82%AC%EC%A7%80%EB%B0%A9-PC%EB%A1%9C-Transformer-%ED%95%99%EC%8A%B5%EC%8B%9C%ED%82%A4%EA%B8%B0-SGB-Chat))
 
 추가적으로 상대적으로 성능이 열악한, 외장 GPU 조차 있지 않은 사지방 PC의 CPU로 Transformer 모델을 학습시켜보고 싶은 약간의 도전정신(?) 또한 이 프로젝트를 진행하는 동기가 됨.
 
