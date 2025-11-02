@@ -8,6 +8,10 @@
 
 ## ✨ Transformer
 
+<p align="center">
+  <img src="./fig/transformer.png" />
+</p>
+
 Tranformer는 시퀀스 입력을 처리하기 위해 **순환 구조(RNN)** 없이 전적으로 **어텐션(Attention)** 메커니즘과 **병렬 연산** 에 의존하는 인코더-디코더(Encoder-Decoder) 아키텍처이다.
 
 원 논문은 [*"Attention Is All You Need" (Vaswani et al., 2017)*](https://arxiv.org/pdf/1706.03762) 이며, 핵심 철학은 다음과 같다:
@@ -581,7 +585,9 @@ class PositionalEncoding(nn.Module):
 
 256차원의 positional encoding 값을 시각적으로 나타내면 다음과 같은 패턴이 나타난다.
 
-![Positional Encoding](./fig/pe.png)
+<p align="center">
+  <img src="./fig/pe.png" />
+</p>
 
 ### 2️⃣ Transformer Class
 
@@ -738,7 +744,9 @@ $$
 
 이를 그래프로 나타낸다면 다음과 같다.
 
-![Noam Scheduler](./fig/noam.png)
+<p align="center">
+  <img src="./fig/noam.png" />
+</p>
 
 ### 4️⃣ Data Setup
 
@@ -1289,7 +1297,9 @@ Out: 군대 시계는 멈추지 않아요 .
 
 동일한 모델 구조, 하이퍼파라미터, 옵티마이저 등과 같은 조건하에서 **Torch** 로 학습한 결과를 **Lucid** 와 비교하였을 때 다음과 같은 Loss curve가 나타나였다.
 
-![Loss Comparison](./fig/loss_comparison.png)
+<p align="center">
+  <img src="./fig/loss_comparison.png" />
+</p>
 
 동일한 설정을 사용했음에도 Torch 모델이 Lucid보다 **전 구간에서 더 낮은 loss를 유지한다**는 점은, 문제의 원인을 *“학습 세팅 차이”* 가 아니라 **Lucid 구현 내부의 세부적 구조 차이**로 좁혀준다.
 
