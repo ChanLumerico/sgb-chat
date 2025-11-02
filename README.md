@@ -909,15 +909,14 @@ $$
 트랜스포머의 출력 로짓(logit) $z_t\in\mathbb{R}^C$ 에 대해 softmax를 취하면 다음과 같다.
 
 $$
-p_\theta(y_t = c \,\big|\, y_{<t}, \mathbf{X})
+p_\theta(y_t = c \mid y_{<t}, \mathbf{X})
 = \frac{\exp(z_{t,c})}{\displaystyle \sum_{c'} \exp(z_{t,c'})}
 $$
 
 이를 손실에 대입하면:
 
 $$
-p_\theta(y_t = c \mid y_{<t}, \mathbf{X})
-= \frac{\exp(z_{t,c})}{\displaystyle \sum_{c'} \exp(z_{t,c'})}
+\mathcal{L}_{seqce}=-\frac{1}{T}\sum_{t=1}^T\log\frac{\exp(z_{t,c})}{\sum_{c'}\exp(z_{t,c'})}=-\frac{1}{T}\sum_{t=1}^T\left(z_{t,y_t}-\log\sum_{c'}\exp(z_{t,c'})\right)
 $$
 
 이는 일반적인 **log-softmax** 형태의 손실과 동일하다.
